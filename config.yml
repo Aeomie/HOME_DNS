@@ -1,0 +1,9 @@
+listen:
+  host: 127.0.0.1
+  port: 1053
+
+upstream:
+  - 1.1.1.1
+  - 8.8.8.8
+
+timeout_seconds: 2.0
