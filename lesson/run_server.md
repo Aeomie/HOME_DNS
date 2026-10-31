@@ -3,7 +3,8 @@
 This guide explains how to run the current milestone of the project. The
 server receives DNS request packets, parses the question, forwards the
 original request to an upstream resolver, and returns the upstream response.
-Local allowlists, blocklists, and caching are not implemented yet.
+Blocked domains are answered locally with `NXDOMAIN` before any upstream
+resolver is contacted.
 
 ## What Poetry does
 
@@ -239,14 +240,12 @@ The current server:
 - Logs and ignores malformed packets.
 - Forwards requests to `1.1.1.1`, then `8.8.8.8` as fallback.
 - Returns successful upstream responses to the client.
-- Does not have local allowlist or blocklist policy yet.
-- Does not block domains yet.
+- Uses exact domains from `data/blocked.txt` as a local blocklist.
+- Does not have an allowlist policy yet.
 - Does not cache responses yet.
 - Includes a project client for sending test requests.
 
-The next implementation milestone is to create a valid DNS response and send
-it back with `sendto()`. After that, the resolver can forward requests to an
-upstream DNS server.
+The next implementation milestone is to add an allowlist and response caching.
 
 ## Useful project commands
 

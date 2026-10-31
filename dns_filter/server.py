@@ -4,28 +4,32 @@ from __future__ import annotations
 
 import argparse
 import logging
+from .config import CONFIG
 import socket
 
-from .packet import DNSPacketError, parse_question, parse_header
-from .resolver import DEFAULT_UPSTREAMS, UpstreamResolutionError, UpstreamResolver
+from .blocklist import load_blocklist, normalize_domain
+from .packet import (
+    DNSPacketError,
+    build_nxdomain_response,
+    parse_header,
+    parse_question,
+)
+from .resolver import UpstreamResolutionError, UpstreamResolver
 
 LOGGER = logging.getLogger(__name__)
 
 
 class UDPParser:
-    """Receive DNS requests, parse them, and log their questions.
-
-    This milestone intentionally does not send responses. The resolver and
-    response path will be added after packet parsing is tested.
-    """
+    """Receive DNS requests, apply local policy, and forward allowed queries."""
 
     
     
     def __init__(
         self,
-        host: str = "127.0.0.1",
-        port: int = 1053,
+        host: str = CONFIG.listen.host,
+        port: int = CONFIG.listen.port,
         resolver: UpstreamResolver | None = None,
+        blocked_domains: set[str] | None = None,
     ) -> None:
         """
         host : localhost by default
@@ -33,6 +37,7 @@ class UDPParser:
         """
         self.address = (host, port)
         self.resolver = resolver or UpstreamResolver()
+        self.blocked_domains = blocked_domains or set()
 
     def serve_forever(self) -> None:
         """
@@ -70,6 +75,11 @@ class UDPParser:
                     question.query_type,
                     question.query_class,
                 )
+                if normalize_domain(question.domain) in self.blocked_domains:
+                    response = build_nxdomain_response(data)
+                    server_socket.sendto(response, client_address)
+                    LOGGER.info("blocked DNS query for %s", question.domain)
+                    continue
                 try:
                     response = self.resolver.resolve(data)
                 except UpstreamResolutionError as exc:
@@ -90,8 +100,8 @@ class UDPParser:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=1053)
+    parser.add_argument("--host", default=CONFIG.listen.host)
+    parser.add_argument("--port", type=int, default=CONFIG.listen.port)
     parser.add_argument(
         "--upstream",
         action="append",
@@ -99,19 +109,22 @@ def main() -> None:
         choices=None,
         help=(
             "upstream DNS IPv4 address; repeat to set order "
-            f"(default: {', '.join(DEFAULT_UPSTREAMS)})"
+            f"(default: {', '.join(CONFIG.upstreams)})"
         ),
     )
-    parser.add_argument("--timeout", type=float, default=2.0)
+    parser.add_argument("--timeout", type=float, default=CONFIG.timeout_seconds)
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    upstreams = tuple(args.upstreams) if args.upstreams else DEFAULT_UPSTREAMS
-    resolver = UpstreamResolver(upstreams=upstreams, timeout=args.timeout)
-    UDPParser(args.host, args.port, resolver).serve_forever()
+    resolver = UpstreamResolver(
+        upstreams=args.upstreams or CONFIG.upstreams,
+        timeout=args.timeout,
+    )
+    blocked_domains = load_blocklist(CONFIG.blocklist_path)
+    UDPParser(args.host, args.port, resolver, blocked_domains).serve_forever()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,12 @@ import struct
 
 import pytest
 
-from dns_filter.packet import DNSPacketError, parse_header, parse_question
+from dns_filter.packet import (
+    DNSPacketError,
+    build_nxdomain_response,
+    parse_header,
+    parse_question,
+)
 
 
 def make_query(domain: str, query_type: int = 1, query_class: int = 1) -> bytes:
@@ -56,3 +61,14 @@ def test_parse_question_rejects_truncated_domain() -> None:
 
     with pytest.raises(DNSPacketError, match="domain"):
         parse_question(data, header)
+
+
+def test_build_nxdomain_response_preserves_question() -> None:
+    request = make_query("blocked.example")
+    response = build_nxdomain_response(request)
+
+    flags = struct.unpack("!H", response[2:4])[0]
+    assert flags & 0x8000
+    assert flags & 0x000F == 3
+    assert struct.unpack("!HHHH", response[4:12]) == (1, 0, 0, 0)
+    assert response[12:] == request[12:]

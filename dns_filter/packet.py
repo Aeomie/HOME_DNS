@@ -91,3 +91,33 @@ def parse_question(data: bytes, DNSResponse: DNSResponse) -> DNSQuestion:
         query_type=query_type,
         query_class=query_class,
     )
+
+
+def build_nxdomain_response(request: bytes) -> bytes:
+    """Build an NXDOMAIN response containing the original question."""
+    if len(request) < 12:
+        raise DNSPacketError("DNS header is truncated")
+
+    parse_header(request)
+    offset = 12
+    while True:
+        if offset >= len(request):
+            raise DNSPacketError("domain name is truncated")
+        label_length = request[offset]
+        offset += 1
+        if label_length == 0:
+            break
+        if label_length > 63:
+            raise DNSPacketError("compressed domain labels are unsupported")
+        if offset + label_length > len(request):
+            raise DNSPacketError("domain label is truncated")
+        offset += label_length
+
+    if offset + 4 > len(request):
+        raise DNSPacketError("question type and class are truncated")
+
+    transaction_id, flags = struct.unpack("!HH", request[:4])
+    response_flags = (flags | 0x8000) & 0xFFF3
+    response_flags |= 0x0003
+    header = struct.pack("!HHHHHH", transaction_id, response_flags, 1, 0, 0, 0)
+    return header + request[12 : offset + 4]

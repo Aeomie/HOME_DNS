@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import socket
 
-
-DEFAULT_UPSTREAMS = ("1.1.1.1", "8.8.8.8")
+from .config import CONFIG
 
 
 class UpstreamResolutionError(RuntimeError):
@@ -17,15 +16,17 @@ class UpstreamResolver:
 
     def __init__(
         self,
-        upstreams: tuple[str, ...] = DEFAULT_UPSTREAMS,
+        upstreams: list[str] | None = None,
         port: int = 53,
-        timeout: float = 2.0,
+        timeout: float = CONFIG.timeout_seconds,
     ) -> None:
+        if upstreams is None:
+            upstreams = CONFIG.upstreams
         if not upstreams:
             raise ValueError("at least one upstream resolver is required")
         if timeout <= 0:
             raise ValueError("upstream timeout must be greater than zero")
-        self.upstreams = upstreams
+        self.upstreams = list(upstreams)
         self.port = port
         self.timeout = timeout
 
