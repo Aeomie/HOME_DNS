@@ -3,8 +3,8 @@
 This guide explains how to run the current milestone of the project. The
 server receives DNS request packets, parses the question, forwards the
 original request to an upstream resolver, and returns the upstream response.
-Blocked domains are answered locally with `NXDOMAIN` before any upstream
-resolver is contacted.
+Configured local records are answered directly before any upstream resolver is
+contacted.
 
 ## What Poetry does
 
@@ -240,8 +240,10 @@ The current server:
 - Logs and ignores malformed packets.
 - Forwards requests to `1.1.1.1`, then `8.8.8.8` as fallback.
 - Returns successful upstream responses to the client.
-- Uses exact domains from `data/blocked.txt` as a local blocklist.
-- Does not have an allowlist policy yet.
+- Uses exact domain-to-IPv4 records from `data/local_records.txt`.
+- Returns `NXDOMAIN` for domains listed in `data/blocked.txt`.
+- Automatically reloads either file when it changes, before handling the next query.
+- Does not cache responses yet.
 - Does not cache responses yet.
 - Includes a project client for sending test requests.
 

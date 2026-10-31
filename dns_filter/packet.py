@@ -121,3 +121,46 @@ def build_nxdomain_response(request: bytes) -> bytes:
     response_flags |= 0x0003
     header = struct.pack("!HHHHHH", transaction_id, response_flags, 1, 0, 0, 0)
     return header + request[12 : offset + 4]
+
+
+def build_a_response(request: bytes, address: str, ttl: int = 60) -> bytes:
+    """Build an authoritative response for an IPv4 local record."""
+    if len(request) < 12:
+        raise DNSPacketError("DNS header is truncated")
+
+    parse_header(request)
+    offset = 12
+    while True:
+        if offset >= len(request):
+            raise DNSPacketError("domain name is truncated")
+        label_length = request[offset]
+        offset += 1
+        if label_length == 0:
+            break
+        if label_length > 63:
+            raise DNSPacketError("compressed domain labels are unsupported")
+        if offset + label_length > len(request):
+            raise DNSPacketError("domain label is truncated")
+        offset += label_length
+
+    if offset + 4 > len(request):
+        raise DNSPacketError("question type and class are truncated")
+
+    query_type, query_class = struct.unpack("!HH", request[offset : offset + 4])
+    if query_type != 1 or query_class != 1:
+        raise DNSPacketError("local records currently support A IN queries only")
+
+    transaction_id, flags = struct.unpack("!HH", request[:4])
+    response_flags = (flags | 0x8000 | 0x0400) & 0xFFF0
+    response_flags |= 0x0000
+    header = struct.pack("!HHHHHH", transaction_id, response_flags, 1, 1, 0, 0)
+    answer = struct.pack(
+        "!HHHIH4s",
+        0xC00C,
+        1,
+        1,
+        ttl,
+        4,
+        bytes(int(part) for part in address.split(".")),
+    )
+    return header + request[12 : offset + 4] + answer

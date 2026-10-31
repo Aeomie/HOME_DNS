@@ -21,6 +21,7 @@ class DNSConfig:
     upstreams: list[str]
     timeout_seconds: float
     blocklist_path: str
+    local_records_path: str
 
 
 def load_config(path: str | Path = "config.yml") -> DNSConfig:
@@ -75,14 +76,22 @@ def load_config(path: str | Path = "config.yml") -> DNSConfig:
         raise ValueError("timeout_seconds must be greater than zero")
 
     blocklist_path = raw_config.get("blocklist_path", "data/blocked.txt")
-    if not isinstance(blocklist_path, str) or not blocklist_path.strip():
-        raise ValueError("blocklist_path must be a non-empty string")
+    local_records_path = raw_config.get(
+        "local_records_path", "data/local_records.txt"
+    )
+    for name, value in (
+        ("blocklist_path", blocklist_path),
+        ("local_records_path", local_records_path),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
 
     return DNSConfig(
         listen=ListenConfig(host=host.strip(), port=port),
         upstreams=upstreams,
         timeout_seconds=timeout_seconds,
         blocklist_path=blocklist_path.strip(),
+        local_records_path=local_records_path.strip(),
     )
 
 

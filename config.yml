@@ -7,4 +7,6 @@ upstream:
   - 8.8.8.8
 
 timeout_seconds: 2.0
+
 blocklist_path: data/blocked.txt
+local_records_path: data/local_records.txt
