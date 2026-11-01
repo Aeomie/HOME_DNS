@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DNS Filter | Dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><div class="brand-mark">D</div><span>DNS Filter</span></div>
+    <nav>
+      <a class="active" href="/"><span>▣ &nbsp; Dashboard</span><b>▣</b></a>
+      <a href="/manage"><span>⚙ &nbsp; DNS policy</span><b>⚙</b></a>
+      <div class="subnav">
+        <a href="/manage/resolvers"><span>Resolvers</span><b>R</b></a>
+        <a href="/manage/blocked"><span>Blocked domains</span><b>B</b></a>
+        <a href="/manage/allowed"><span>Allowed domains</span><b>A</b></a>
+      </div>
+      <a id="api-docs-link" hidden href="/internal/swagger"><span>⌘ &nbsp; API docs</span><b>⌘</b></a>
+      <a href="/admin/login"><span>🔐 &nbsp; Admin login</span><b>🔐</b></a>
+    </nav>
+    <div class="side-status"><div>Service status</div><p class="online">● Online</p><small>Local DNS filter</small></div>
+  </aside>
+  <main>
+    <div class="topbar"><h1>Dashboard</h1><div class="updated">Live status · <span id="updated">updating</span></div></div>
+    <div class="cards">
+      <div class="card"><div class="label">Blocked domains</div><div id="blocked-count" class="value">-</div></div>
+      <div class="card"><div class="label">Allowed domains</div><div id="record-count" class="value">-</div></div>
+      <div class="card"><div class="label">Blocked queries</div><div id="query-count" class="value">-</div></div>
+    </div>
+    <div class="grid">
+      <section class="panel full">
+        <div class="panel-heading"><h2>Blocked queries</h2><span id="history-total" class="count">0 blocked</span></div>
+        <div class="window-picker" role="group" aria-label="Chart type">
+          <button type="button" data-chart="bar">Bars</button>
+          <button type="button" data-chart="area">Area</button>
+          <button type="button" data-chart="stacked">Devices over time</button>
+          <button type="button" data-chart="pie-domains">Pie: websites</button>
+          <button type="button" data-chart="pie-devices">Pie: devices</button>
+          <button type="button" data-chart="pie-types">Pie: query types</button>
+        </div>
+        <div class="window-picker" role="group" aria-label="Time window">
+          <button type="button" data-window="300">5 min</button>
+          <button type="button" data-window="900">15 min</button>
+          <button type="button" data-window="3600">1 hour</button>
+          <button type="button" data-window="21600">6 hours</button>
+          <button type="button" data-window="86400">1 day</button>
+        </div>
+        <div id="chart" class="chart" role="img"></div>
+        <div id="chart-tip" class="chart-tip" hidden></div>
+        <h3>Most blocked websites</h3>
+        <div id="top-domains"></div>
+      </section>
+      <section class="panel full">
+        <div class="panel-heading"><h2>Recent blocked activity</h2><span class="count">Live</span></div>
+        <div id="recent-blocked" class="table-scroll"></div>
+      </section>
+    </div>
+  </main>
+</div>
+<script>
+const CHART = {height: 220, top: 12, right: 4, bottom: 26, left: 34, gap: 2};
+const SERIES_LIMIT = 6;
+const STORAGE_KEY = 'dns-filter-chart';
+const CHARTS = {
+  bar: {label: 'bars over time'},
+  area: {label: 'area over time'},
+  stacked: {label: 'stacked bars by device', devices: true},
+  'pie-domains': {label: 'share by website', pie: () => history.top_domains.map(item => ({key: item.domain, count: item.count}))},
+  'pie-devices': {label: 'share by device', devices: true, pie: () => history.devices.map(item => ({key: item.client, count: item.count}))},
+  'pie-types': {label: 'share by query type', pie: () => history.types.map(item => ({key: item.type, count: item.count}))},
+};
+const seriesSlots = {};
+let historyWindow = 3600;
+let chartType = 'bar';
+let history = null;
+let series = [];
+let pointerX = null;
+let pointerSlice = null;
+function remember() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({chartType, historyWindow})); } catch (error) { /* Saving the choice is optional. */ }
+}
+function restore() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+    if (CHARTS[saved.chartType]) chartType = saved.chartType;
+    if (document.querySelector(`[data-window="${saved.historyWindow}"]`)) historyWindow = saved.historyWindow;
+  } catch (error) { /* Fall back to the defaults. */ }
+}
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, character => `&#${character.charCodeAt(0)};`);
+}
+function clock(seconds, withSeconds) {
+  return new Date(seconds * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: withSeconds ? '2-digit' : undefined});
+}
+function axisStep(max) {
+  const magnitude = 10 ** Math.floor(Math.log10(max));
+  return [1, 2, 5, 10].map(factor => factor * magnitude).find(step => step >= 1 && step * 4 >= max) || 1;
+}
+function barGeometry(width) {
+  const plot = width - CHART.left - CHART.right;
+  return {plot, slot: plot / history.bars.length};
+}
+function timeFrame(width) {
+  const {slot} = barGeometry(width);
+  const max = Math.max(...history.bars.map(bar => bar.count));
+  const step = axisStep(Math.max(1, max));
+  const top = Math.max(step, Math.ceil(max / step) * step);
+  const base = CHART.height - CHART.bottom;
+  const y = value => base - (value / top) * (base - CHART.top);
+  let axes = '';
+  for (let value = 0; value <= top; value += step) {
+    axes += `<line class="chart-grid" x1="${CHART.left}" x2="${width - CHART.right}" y1="${y(value)}" y2="${y(value)}"></line>`;
+    axes += `<text class="chart-axis" x="${CHART.left - 8}" y="${y(value) + 4}" text-anchor="end">${value}</text>`;
+  }
+  const labels = 5;
+  for (let label = 0; label < labels; label += 1) {
+    const index = Math.round(label * (history.bars.length - 1) / (labels - 1));
+    const x = CHART.left + (index + 0.5) * slot;
+    const anchor = label === 0 ? 'start' : label === labels - 1 ? 'end' : 'middle';
+    axes += `<text class="chart-axis" x="${x}" y="${CHART.height - 6}" text-anchor="${anchor}">${clock(history.bars[index].start, history.bar_seconds < 60)}</text>`;
+  }
+  return {slot, base, y, axes};
+}
+function roundedBar(x, base, width, height, attributes) {
+  const r = Math.min(4, width / 2, height);
+  return `<path ${attributes} d="M${x} ${base}v${r - height}q0 ${-r} ${r} ${-r}h${width - 2 * r}q${r} 0 ${r} ${r}v${height - r}z"></path>`;
+}
+function svg(width, content) {
+  return `<svg width="${width}" height="${CHART.height}">${content}</svg>`;
+}
+function renderBars(element, width) {
+  const {slot, base, y, axes} = timeFrame(width);
+  const bars = history.bars.map((bar, index) => {
+    if (!bar.count) return '';
+    const x = CHART.left + index * slot + CHART.gap / 2;
+    return roundedBar(x, base, Math.max(1, slot - CHART.gap), Math.max(2, base - y(bar.count)), `class="chart-bar" data-index="${index}"`);
+  }).join('');
+  element.innerHTML = svg(width, axes + bars);
+}
+function renderArea(element, width) {
+  const {slot, base, y, axes} = timeFrame(width);
+  const points = history.bars.map((bar, index) => `${CHART.left + (index + 0.5) * slot} ${y(bar.count)}`);
+  const first = CHART.left + slot / 2;
+  const last = CHART.left + (history.bars.length - 0.5) * slot;
+  element.innerHTML = svg(width, `${axes}<path class="chart-area" d="M${first} ${base}L${points.join('L')}L${last} ${base}z"></path><path class="chart-line" d="M${points.join('L')}"></path><line id="chart-cursor" class="chart-cursor" y1="${CHART.top}" y2="${base}" visibility="hidden"></line><circle id="chart-point" class="chart-point" r="4" visibility="hidden"></circle>`);
+}
+function buildSeries(kind, entries) {
+  const sorted = [...entries].sort((a, b) => b.count - a.count);
+  const shown = sorted.slice(0, SERIES_LIMIT);
+  const slots = seriesSlots[kind] || (seriesSlots[kind] = new Map());
+  const used = new Set(shown.filter(item => slots.has(item.key)).map(item => slots.get(item.key)));
+  shown.forEach(item => {
+    if (slots.has(item.key)) return;
+    let slot = 1;
+    while (used.has(slot)) slot += 1;
+    slots.set(item.key, slot);
+    used.add(slot);
+  });
+  const result = shown.map(item => ({...item, color: `var(--series-${slots.get(item.key)})`}));
+  const other = history.total - shown.reduce((sum, item) => sum + item.count, 0);
+  if (other > 0) result.push({key: 'Other', count: other, color: 'var(--series-other)', other: true});
+  return result;
+}
+function legend(items) {
+  return `<ul class="chart-legend">${items.map(item => {
+    const percent = history.total ? Math.round(item.count / history.total * 100) : 0;
+    return `<li><span class="swatch" style="background:${item.color}"></span><code>${esc(item.key)}</code><b>${item.count.toLocaleString()}</b><span class="muted">${percent}%</span></li>`;
+  }).join('')}</ul>`;
+}
+function renderStacked(element, width) {
+  const {slot, base, y, axes} = timeFrame(width);
+  series = buildSeries('devices', history.devices.map(item => ({key: item.client, count: item.count})));
+  const named = new Set(series.filter(item => !item.other).map(item => item.key));
+  const barWidth = Math.max(1, slot - CHART.gap);
+  const bars = history.bars.map((bar, index) => {
+    const x = CHART.left + index * slot + CHART.gap / 2;
+    const clients = bar.clients || {};
+    const values = series.map(item => item.other
+      ? Object.entries(clients).reduce((sum, [client, count]) => sum + (named.has(client) ? 0 : count), 0)
+      : clients[item.key] || 0);
+    const segments = values.map((value, slotIndex) => ({value, color: series[slotIndex].color})).filter(segment => segment.value);
+    let running = 0;
+    return segments.map((segment, position) => {
+      const bottom = y(running);
+      running += segment.value;
+      const top = y(running);
+      const height = bottom - top;
+      if (position === segments.length - 1) return roundedBar(x, bottom, barWidth, Math.max(1, height), `class="chart-segment" style="fill:${segment.color}"`);
+      const gap = height > 2 * CHART.gap ? CHART.gap : 0;
+      return `<rect class="chart-segment" x="${x}" y="${top + gap}" width="${barWidth}" height="${height - gap}" style="fill:${segment.color}"></rect>`;
+    }).join('');
+  }).join('');
+  element.innerHTML = svg(width, axes + bars) + legend(series);
+}
+function renderPie(element) {
+  series = buildSeries(chartType, CHARTS[chartType].pie());
+  if (!history.total) { element.innerHTML = '<div class="empty">Nothing blocked in this window.</div>'; return; }
+  const gap = series.length > 1 ? 0.6 : 0;
+  let offset = 0;
+  const slices = series.map((item, index) => {
+    const share = item.count / history.total * 100;
+    const slice = `<circle class="chart-slice" data-slice="${index}" cx="100" cy="100" r="72" pathLength="100" stroke-dasharray="${Math.max(0.2, share - gap)} 100" stroke-dashoffset="${-offset}" transform="rotate(-90 100 100)" style="stroke:${item.color}"></circle>`;
+    offset += share;
+    return slice;
+  }).join('');
+  element.innerHTML = `<div class="chart-pie"><svg width="200" height="200">${slices}<text class="chart-total" x="100" y="98" text-anchor="middle">${history.total.toLocaleString()}</text><text class="chart-axis" x="100" y="116" text-anchor="middle">blocked</text></svg>${legend(series)}</div>`;
+}
+function renderChart() {
+  const element = document.querySelector('#chart');
+  const chart = CHARTS[chartType];
+  series = [];
+  if (chart.devices && !history.devices) element.innerHTML = '<div class="empty">Log in as admin to view devices.</div>';
+  else if (chart.pie) renderPie(element);
+  else if (chartType === 'stacked') renderStacked(element, element.clientWidth);
+  else if (chartType === 'area') renderArea(element, element.clientWidth);
+  else renderBars(element, element.clientWidth);
+  element.setAttribute('aria-label', `${history.total} blocked queries in the selected window, ${chart.label}`);
+  showTip();
+}
+function placeTip(tip, element, text) {
+  tip.textContent = text;
+  tip.hidden = false;
+  const left = Math.min(pointerX + element.offsetLeft + 12, element.offsetLeft + element.clientWidth - tip.offsetWidth);
+  tip.style.left = `${Math.max(element.offsetLeft, left)}px`;
+  tip.style.top = `${element.offsetTop + 8}px`;
+}
+function barTipLines(bar) {
+  const withSeconds = history.bar_seconds < 60;
+  const lines = [`${clock(bar.start, withSeconds)} - ${clock(bar.start + history.bar_seconds, withSeconds)}: ${bar.count} blocked`];
+  if (chartType === 'stacked') Object.entries(bar.clients || {}).sort((a, b) => b[1] - a[1]).forEach(([client, count]) => lines.push(`${client}: ${count}`));
+  return lines.join('\n');
+}
+function showTip() {
+  const tip = document.querySelector('#chart-tip');
+  const element = document.querySelector('#chart');
+  document.querySelectorAll('.chart-bar.hover').forEach(bar => bar.classList.remove('hover'));
+  const cursor = document.querySelector('#chart-cursor');
+  const point = document.querySelector('#chart-point');
+  if (cursor) { cursor.setAttribute('visibility', 'hidden'); point.setAttribute('visibility', 'hidden'); }
+  tip.hidden = true;
+  if (pointerX === null || !history) return;
+  if (CHARTS[chartType].pie) {
+    const item = series[pointerSlice];
+    if (item) placeTip(tip, element, `${item.key}: ${item.count.toLocaleString()} (${Math.round(item.count / history.total * 100)}%)`);
+    return;
+  }
+  if (CHARTS[chartType].devices && !history.devices) return;
+  const {slot} = barGeometry(element.clientWidth);
+  const index = Math.floor((pointerX - CHART.left) / slot);
+  const bar = history.bars[index];
+  if (!bar) return;
+  placeTip(tip, element, barTipLines(bar));
+  document.querySelector(`.chart-bar[data-index="${index}"]`)?.classList.add('hover');
+  if (cursor) {
+    const x = CHART.left + (index + 0.5) * slot;
+    cursor.setAttribute('x1', x);
+    cursor.setAttribute('x2', x);
+    cursor.setAttribute('visibility', 'visible');
+    point.setAttribute('cx', x);
+    point.setAttribute('cy', timeFrame(element.clientWidth).y(bar.count));
+    point.setAttribute('visibility', 'visible');
+  }
+}
+function renderTopDomains() {
+  const top = history.top_domains;
+  const max = Math.max(1, ...top.map(item => item.count));
+  document.querySelector('#top-domains').innerHTML = top.length
+    ? top.map(item => `<div class="top-domain"><code>${esc(item.domain)}</code><span class="top-track"><span style="width:${item.count / max * 100}%"></span></span><b>${item.count}</b></div>`).join('')
+    : '<div class="empty">Nothing blocked in this window.</div>';
+}
+function renderRecent(items) {
+  document.querySelector('#recent-blocked').innerHTML = items.length
+    ? `<table><thead><tr><th>Time</th><th>Domain</th><th>Type</th><th>Device IP</th></tr></thead><tbody>${items.map(item => `<tr><td>${esc(new Date(item.time).toLocaleString())}</td><td><code>${esc(item.domain)}</code></td><td>${esc(item.type)}</td><td>${item.client ? `<code>${esc(item.client)}</code>` : '<span class="muted">Log in to view</span>'}</td></tr>`).join('')}</tbody></table>`
+    : '<div class="empty">No blocked queries yet.</div>';
+}
+async function refresh() {
+  try {
+    const requested = historyWindow;
+    const [data, nextHistory] = await Promise.all([
+      fetch('/api/status').then(response => response.json()),
+      fetch(`/api/blocked-history?window=${requested}`).then(response => response.json()),
+    ]);
+    document.querySelector('#blocked-count').textContent = data.blocked_count;
+    document.querySelector('#record-count').textContent = data.local_record_count;
+    document.querySelector('#query-count').textContent = data.blocked_queries;
+    document.querySelector('#updated').textContent = new Date().toLocaleTimeString();
+    renderRecent(data.recent_blocked);
+    if (requested !== historyWindow) return;
+    history = nextHistory;
+    document.querySelector('#history-total').textContent = `${history.total} blocked`;
+    renderChart();
+    renderTopDomains();
+  } catch (error) { document.querySelector('#updated').textContent = 'connection lost'; }
+}
+function markSelected() {
+  document.querySelectorAll('[data-window]').forEach(element => element.setAttribute('aria-pressed', Number(element.dataset.window) === historyWindow));
+  document.querySelectorAll('[data-chart]').forEach(element => element.setAttribute('aria-pressed', element.dataset.chart === chartType));
+}
+document.querySelectorAll('[data-window]').forEach(element => element.addEventListener('click', () => {
+  historyWindow = Number(element.dataset.window);
+  markSelected();
+  remember();
+  refresh();
+}));
+document.querySelectorAll('[data-chart]').forEach(element => element.addEventListener('click', () => {
+  chartType = element.dataset.chart;
+  pointerSlice = null;
+  markSelected();
+  remember();
+  if (history) renderChart();
+}));
+const chart = document.querySelector('#chart');
+['pointermove', 'pointerdown'].forEach(name => chart.addEventListener(name, event => {
+  pointerX = event.clientX - chart.getBoundingClientRect().left;
+  pointerSlice = event.target.closest('[data-slice]')?.dataset.slice ?? null;
+  showTip();
+}));
+chart.addEventListener('pointerleave', () => { pointerX = null; pointerSlice = null; showTip(); });
+window.addEventListener('resize', () => { if (history) renderChart(); });
+restore();
+markSelected();
+refresh();
+setInterval(refresh, 2000);
+fetch('/admin/access')
+  .then(response => response.json())
+  .then(data => { document.querySelector('#api-docs-link').hidden = !data.can_view_docs; });
+</script>
+</body>
+</html>

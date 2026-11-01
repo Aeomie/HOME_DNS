@@ -240,14 +240,77 @@ The current server:
 - Logs and ignores malformed packets.
 - Forwards requests to `1.1.1.1`, then `8.8.8.8` as fallback.
 - Returns successful upstream responses to the client.
-- Uses exact domain-to-IPv4 records from `data/local_records.txt`.
-- Returns `NXDOMAIN` for domains listed in `data/blocked.txt`.
+- Uses exact domain-to-IPv4 records from the `.txt` files in `data/allowed/`.
+- Returns `NXDOMAIN` for domains listed in the `.txt` files in `data/blocked/`.
 - Automatically reloads either file when it changes, before handling the next query.
 - Does not cache responses yet.
 - Does not cache responses yet.
 - Includes a project client for sending test requests.
 
 The next implementation milestone is to add an allowlist and response caching.
+
+The FastAPI dashboard is organized under `dns_filter/website/`. The integrated
+DNS server starts it on the configured dashboard port, or it can be started
+separately with:
+
+```powershell
+py -m poetry run python -m dns_filter.website.main
+```
+
+Its status API is defined in `dns_filter/website/endpoints/status.py`.
+Open `/manage/blocked` or `/manage/allowed` to add blocked domains and local
+IPv4 records through the dashboard. These forms append to the policy files, and the DNS server reloads
+the changes on the next DNS request.
+Internal API documentation is available from the same machine at
+`http://127.0.0.1:8000/internal/swagger`. Remote access requires an admin login. Create the administrator interactively
+once with:
+
+```powershell
+py -m poetry run dns-filter-create-admin
+```
+
+The command asks for the username and password and stores a salted password
+hash in `data/admin_credentials.json` (which is excluded from git). Open
+`/admin/login`, generate a security token, copy the token printed in the server
+console, and submit it with the admin credentials. The token expires after two
+minutes and the resulting session expires after eight hours. The default
+public FastAPI docs and OpenAPI routes are disabled.
+
+Environment variables can also be used instead of the credentials file:
+`DNS_FILTER_ADMIN_USERNAME` and `DNS_FILTER_ADMIN_PASSWORD`.
+
+For example, in PowerShell:
+
+```powershell
+$env:DNS_FILTER_ADMIN_USERNAME = "admin"
+$env:DNS_FILTER_ADMIN_PASSWORD = "use-a-long-random-password"
+py -m poetry run python -m dns_filter.server
+```
+
+Policy-changing API requests also require the admin session, even when the
+dashboard itself is reachable publicly.
+
+DNS policy has three sub-pages: `/manage/resolvers`, `/manage/blocked`, and
+`/manage/allowed`. Every `.txt` file in `data/blocked/` is a blocked list, and
+every `.txt` file in `data/allowed/` is a list of local records. Add, replace,
+or delete files while the server runs and it reloads them on the next DNS
+request. Blocked lists can be plain domains, hosts-file lines, or `||domain^`
+rules. Allowed lists need `<IPv4 address> <domain>` lines. Lines that cannot be
+read are skipped and counted on the page. Entries added on the website are
+saved to `custom.txt` in that folder. A domain that is both allowed and blocked
+stays blocked. Each
+sub-page lists the current entries and supports activation or deactivation.
+The blocked and allowed lists show 10, 20, 50, or 100 domains per page.
+
+The dashboard graphs blocked queries over a chosen window as bars, an area
+chart, stacked bars by device, or pie charts by website, device, or query type,
+and lists recent blocked queries with the client IP. This history is kept in memory for 24 hours
+and clears when the server restarts. Client IPs are only shown to the local
+machine or a logged-in admin. To see other devices, set `listen.host` to the
+server's LAN address and point those devices at it as their DNS server.
+Blocked and allowed domains can be imported from a text area or file; use one blocked domain per line, or one local record as
+`<IPv4 address> <domain>` per line. Resolver changes are saved in
+`data/resolvers.json` and are picked up by the running DNS server.
 
 ## Useful project commands
 

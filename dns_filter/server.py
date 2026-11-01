@@ -7,8 +7,11 @@ import logging
 from pathlib import Path
 from .config import CONFIG
 import socket
+import threading
+from threading import RLock
 
-from .blocklist import load_blocklist
+from .website.main import create_app
+from .website.state import DashboardState
 from .packet import (
     DNSPacketError,
     build_a_response,
@@ -17,7 +20,7 @@ from .packet import (
     parse_question,
 )
 from .resolver import UpstreamResolutionError, UpstreamResolver
-from .local_records import load_local_records_file
+from .policy import load_allowed_records, load_blocklist, list_signature
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,8 +37,9 @@ class UDPParser:
         resolver: UpstreamResolver | None = None,
         local_records: dict[str, str] | None = None,
         blocked_domains: set[str] | None = None,
-        blocklist_path: str | Path | None = None,
-        local_records_path: str | Path | None = None,
+        blocked_lists_dir: str | Path | None = None,
+        allowed_lists_dir: str | Path | None = None,
+        dashboard_state: DashboardState | None = None,
     ) -> None:
         """
         host : localhost by default
@@ -45,33 +49,39 @@ class UDPParser:
         self.resolver = resolver or UpstreamResolver()
         self.local_records = local_records or {}
         self.blocked_domains = blocked_domains or set()
-        self.blocklist_path = Path(blocklist_path) if blocklist_path else None
-        self.local_records_path = (
-            Path(local_records_path) if local_records_path else None
-        )
-        self._policy_mtimes: dict[Path, int] = {}
-        self._remember_policy_mtimes()
+        self.blocked_lists_dir = Path(blocked_lists_dir) if blocked_lists_dir else None
+        self.allowed_lists_dir = Path(allowed_lists_dir) if allowed_lists_dir else None
+        self._policy_signatures: dict[Path, tuple] = {}
+        self._policy_lock = RLock()
+        self.dashboard_state = dashboard_state
+        self._remember_policy_signatures()
 
-    def _remember_policy_mtimes(self) -> None:
-        for path in (self.blocklist_path, self.local_records_path):
-            if path is not None:
-                self._policy_mtimes[path] = path.stat().st_mtime_ns
+    def _remember_policy_signatures(self) -> None:
+        for directory in (self.blocked_lists_dir, self.allowed_lists_dir):
+            if directory is not None:
+                self._policy_signatures[directory] = list_signature(directory)
 
     def _refresh_policy_files(self) -> None:
-        """Reload changed policy files while keeping the server running."""
-        if self.blocklist_path is not None:
-            blocklist_mtime = self.blocklist_path.stat().st_mtime_ns
-            if self._policy_mtimes.get(self.blocklist_path) != blocklist_mtime:
-                self.blocked_domains = load_blocklist(self.blocklist_path)
-                self._policy_mtimes[self.blocklist_path] = blocklist_mtime
-                LOGGER.info("reloaded blocklist from %s", self.blocklist_path)
+        """Reload changed list folders while keeping the server running."""
+        with self._policy_lock:
+            if self.blocked_lists_dir is not None:
+                signature = list_signature(self.blocked_lists_dir)
+                if self._policy_signatures.get(self.blocked_lists_dir) != signature:
+                    self.blocked_domains = load_blocklist(self.blocked_lists_dir)
+                    self._policy_signatures[self.blocked_lists_dir] = signature
+                    LOGGER.info("reloaded blocked lists from %s", self.blocked_lists_dir)
 
-        if self.local_records_path is not None:
-            records_mtime = self.local_records_path.stat().st_mtime_ns
-            if self._policy_mtimes.get(self.local_records_path) != records_mtime:
-                self.local_records = load_local_records_file(self.local_records_path)
-                self._policy_mtimes[self.local_records_path] = records_mtime
-                LOGGER.info("reloaded local records from %s", self.local_records_path)
+            if self.allowed_lists_dir is not None:
+                signature = list_signature(self.allowed_lists_dir)
+                if self._policy_signatures.get(self.allowed_lists_dir) != signature:
+                    self.local_records = load_allowed_records(self.allowed_lists_dir)
+                    self._policy_signatures[self.allowed_lists_dir] = signature
+                    LOGGER.info("reloaded allowed lists from %s", self.allowed_lists_dir)
+
+    def policy_snapshot(self) -> tuple[set[str], dict[str, str]]:
+        self._refresh_policy_files()
+        with self._policy_lock:
+            return set(self.blocked_domains), dict(self.local_records)
 
     def serve_forever(self) -> None:
         """
@@ -114,6 +124,12 @@ class UDPParser:
                     question.query_class,
                 )
                 if question.domain in self.blocked_domains:
+                    if self.dashboard_state is not None:
+                        self.dashboard_state.record_blocked(
+                            question.domain,
+                            client_address[0],
+                            question.query_type,
+                        )
                     server_socket.sendto(build_nxdomain_response(data), client_address)
                     LOGGER.info("blocked DNS query for %s", question.domain)
                     continue
@@ -170,18 +186,36 @@ def main() -> None:
     resolver = UpstreamResolver(
         upstreams=args.upstreams or CONFIG.upstreams,
         timeout=args.timeout,
+        resolver_path=CONFIG.resolvers_path,
     )
-    blocked_domains = load_blocklist(CONFIG.blocklist_path)
-    local_records = load_local_records_file(CONFIG.local_records_path)
-    UDPParser(
+    blocked_domains = load_blocklist(CONFIG.blocked_lists_dir)
+    local_records = load_allowed_records(CONFIG.allowed_lists_dir)
+    dashboard_state = DashboardState()
+    dns_server = UDPParser(
         args.host,
         args.port,
         resolver,
         local_records,
         blocked_domains,
-        CONFIG.blocklist_path,
-        CONFIG.local_records_path,
-    ).serve_forever()
+        CONFIG.blocked_lists_dir,
+        CONFIG.allowed_lists_dir,
+        dashboard_state,
+    )
+    dashboard_app = create_app(dns_server.policy_snapshot, dashboard_state)
+    import uvicorn
+
+    dashboard_thread = threading.Thread(
+        target=uvicorn.run,
+        args=(dashboard_app,),
+        kwargs={
+            "host": CONFIG.dashboard.host,
+            "port": CONFIG.dashboard.port,
+            "log_level": "info",
+        },
+        daemon=True,
+    )
+    dashboard_thread.start()
+    dns_server.serve_forever()
 
 
 if __name__ == "__main__":

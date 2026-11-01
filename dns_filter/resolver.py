@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 
 from .config import CONFIG
+from .policy import load_resolvers
 
 
 class UpstreamResolutionError(RuntimeError):
@@ -19,6 +20,7 @@ class UpstreamResolver:
         upstreams: list[str] | None = None,
         port: int = 53,
         timeout: float = CONFIG.timeout_seconds,
+        resolver_path: str | None = None,
     ) -> None:
         if upstreams is None:
             upstreams = CONFIG.upstreams
@@ -29,6 +31,7 @@ class UpstreamResolver:
         self.upstreams = list(upstreams)
         self.port = port
         self.timeout = timeout
+        self.resolver_path = resolver_path
 
     def resolve(self, request: bytes) -> bytes:
         """Try each upstream in order and return the first valid response."""
@@ -36,6 +39,18 @@ class UpstreamResolver:
             raise ValueError("DNS request must contain a transaction ID")
 
         transaction_id = request[:2]
+        if self.resolver_path is not None:
+            try:
+                resolvers = load_resolvers(self.resolver_path, self.upstreams)
+            except (OSError, ValueError) as exc:
+                raise UpstreamResolutionError(
+                    f"could not read resolver file: {exc}"
+                ) from exc
+            self.upstreams = [
+                address for address, active in resolvers.items() if active
+            ]
+        if not self.upstreams:
+            raise UpstreamResolutionError("no active upstream resolvers configured")
         failures: list[str] = []
 
         for upstream in self.upstreams:

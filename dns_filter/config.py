@@ -18,10 +18,12 @@ class ListenConfig:
 @dataclass(frozen=True)
 class DNSConfig:
     listen: ListenConfig
+    dashboard: ListenConfig
     upstreams: list[str]
     timeout_seconds: float
-    blocklist_path: str
-    local_records_path: str
+    blocked_lists_dir: str
+    allowed_lists_dir: str
+    resolvers_path: str
 
 
 def load_config(path: str | Path = "config.yml") -> DNSConfig:
@@ -53,6 +55,18 @@ def load_config(path: str | Path = "config.yml") -> DNSConfig:
     if not 1 <= port <= 65535:
         raise ValueError("listen.port must be between 1 and 65535")
 
+    dashboard = raw_config.get("dashboard")
+    if not isinstance(dashboard, dict):
+        raise ValueError("dashboard must be a mapping")
+    dashboard_host = dashboard.get("host")
+    dashboard_port = dashboard.get("port")
+    if not isinstance(dashboard_host, str) or not dashboard_host.strip():
+        raise ValueError("dashboard.host must be a string")
+    if isinstance(dashboard_port, bool) or not isinstance(dashboard_port, int):
+        raise ValueError("dashboard.port must be an integer")
+    if not 1 <= dashboard_port <= 65535:
+        raise ValueError("dashboard.port must be between 1 and 65535")
+
     upstreams = raw_config.get("upstream")
     if (
         not isinstance(upstreams, list)
@@ -75,23 +89,28 @@ def load_config(path: str | Path = "config.yml") -> DNSConfig:
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
 
-    blocklist_path = raw_config.get("blocklist_path", "data/blocked.txt")
-    local_records_path = raw_config.get(
-        "local_records_path", "data/local_records.txt"
-    )
+    blocked_lists_dir = raw_config.get("blocked_lists_dir", "data/blocked")
+    allowed_lists_dir = raw_config.get("allowed_lists_dir", "data/allowed")
+    resolvers_path = raw_config.get("resolvers_path", "data/resolvers.json")
     for name, value in (
-        ("blocklist_path", blocklist_path),
-        ("local_records_path", local_records_path),
+        ("blocked_lists_dir", blocked_lists_dir),
+        ("allowed_lists_dir", allowed_lists_dir),
+        ("resolvers_path", resolvers_path),
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} must be a non-empty string")
 
     return DNSConfig(
         listen=ListenConfig(host=host.strip(), port=port),
+        dashboard=ListenConfig(
+            host=dashboard_host.strip(),
+            port=dashboard_port,
+        ),
         upstreams=upstreams,
         timeout_seconds=timeout_seconds,
-        blocklist_path=blocklist_path.strip(),
-        local_records_path=local_records_path.strip(),
+        blocked_lists_dir=blocked_lists_dir.strip(),
+        allowed_lists_dir=allowed_lists_dir.strip(),
+        resolvers_path=resolvers_path.strip(),
     )
 
 

@@ -4,3 +4,5 @@ __pycache__/
 poetry.lock
 dns_filter/__pycache__/
 *.pyc
+data/admin_credentials.json
+data/resolvers.json

@@ -2,11 +2,16 @@ listen:
   host: 127.0.0.1
   port: 1053
 
+dashboard:
+  host: 127.0.0.1
+  port: 8000
+
 upstream:
   - 1.1.1.1
   - 8.8.8.8
 
 timeout_seconds: 2.0
 
-blocklist_path: data/blocked.txt
-local_records_path: data/local_records.txt
+blocked_lists_dir: data/blocked
+allowed_lists_dir: data/allowed
+resolvers_path: data/resolvers.json

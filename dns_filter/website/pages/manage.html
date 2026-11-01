@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DNS Filter | Policy</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="manage-page">
+<div class="shell">
+  <aside>
+    <a class="brand" href="/"><div class="brand-mark">D</div><span>DNS Filter</span></a>
+    <nav>
+      <a href="/"><span>▣ &nbsp; Dashboard</span><b>▣</b></a>
+      <a class="active" href="/manage"><span>⚙ &nbsp; DNS policy</span><b>⚙</b></a>
+      <div class="subnav">
+        <a href="/manage/resolvers"><span>Resolvers</span><b>R</b></a>
+        <a href="/manage/blocked"><span>Blocked domains</span><b>B</b></a>
+        <a href="/manage/allowed"><span>Allowed domains</span><b>A</b></a>
+      </div>
+      <a id="api-docs-link" hidden href="/internal/swagger"><span>⌘ &nbsp; API docs</span><b>⌘</b></a>
+      <a href="/admin/login"><span>🔐 &nbsp; Admin login</span><b>🔐</b></a>
+    </nav>
+    <div class="side-status"><div>Service status</div><p class="online">● Online</p><small>Local DNS filter</small></div>
+  </aside>
+  <main>
+    <div class="topbar">
+      <div><h1 id="section-title">DNS policy</h1><p id="section-intro" class="muted"></p></div>
+      <a href="/">← Dashboard</a>
+    </div>
+    <div class="policy-tabs">
+      <a href="/manage/resolvers">Resolvers</a>
+      <a href="/manage/blocked">Blocked</a>
+      <a href="/manage/allowed">Allowed</a>
+    </div>
+    <div data-section="resolvers" hidden>
+      <div class="grid">
+        <section class="panel full">
+          <div class="panel-heading"><h2>Current resolvers</h2><span id="resolver-count" class="count">0</span></div>
+          <p id="resolver-warning" class="message"></p>
+          <div id="resolver-entries" class="entry-list"></div>
+        </section>
+        <section class="panel full local">
+          <h2>Add resolver</h2>
+          <form id="resolver-form">
+            <label for="resolver-address">IPv4 address</label>
+            <input id="resolver-address" required placeholder="1.1.1.1">
+            <button type="submit">Add resolver</button>
+          </form>
+        </section>
+      </div>
+    </div>
+    <div data-section="blocked" hidden>
+      <div class="grid">
+        <section class="panel full">
+          <div class="panel-heading"><h2>Current blocked domains</h2><span id="blocked-count" class="count">0</span></div>
+          <input class="list-search" type="search" data-search="blocked" placeholder="Search domains" aria-label="Search blocked domains">
+          <div id="blocked-entries" class="entry-list"></div>
+          <div id="blocked-pager" class="pager" data-pager="blocked" hidden></div>
+        </section>
+        <section class="panel full">
+          <h2>List files</h2>
+          <div id="blocked-files"></div>
+        </section>
+        <section class="panel danger">
+          <h2>Add domain</h2>
+          <p>Saved to custom.txt.</p>
+          <form id="blocked-form">
+            <label for="blocked-domain">Domain</label>
+            <input id="blocked-domain" required placeholder="ads.example.com">
+            <button type="submit">Add domain</button>
+          </form>
+        </section>
+        <section class="panel danger">
+          <h2>Import list</h2>
+          <p>One domain per line. Saved to custom.txt.</p>
+          <label for="blocked-list">Domain list</label>
+          <textarea id="blocked-list" rows="6" placeholder="ads.example.com&#10;tracker.example.net"></textarea>
+          <input id="blocked-file" type="file" accept=".txt,.list">
+          <button id="blocked-import" type="button">Import list</button>
+        </section>
+      </div>
+    </div>
+    <div data-section="allowed" hidden>
+      <div class="grid">
+        <section class="panel full">
+          <div class="panel-heading"><h2>Current allowed domains</h2><span id="allowed-count" class="count">0</span></div>
+          <input class="list-search" type="search" data-search="local" placeholder="Search domains" aria-label="Search allowed domains">
+          <div id="local-entries" class="entry-list"></div>
+          <div id="local-pager" class="pager" data-pager="local" hidden></div>
+        </section>
+        <section class="panel full">
+          <h2>List files</h2>
+          <div id="local-files"></div>
+        </section>
+        <section class="panel local">
+          <h2>Add domain</h2>
+          <p>Saved to custom.txt.</p>
+          <form id="record-form">
+            <label for="record-domain">Domain</label>
+            <input id="record-domain" required placeholder="nas.home">
+            <label for="record-address">IPv4 address</label>
+            <input id="record-address" required placeholder="192.168.1.20">
+            <button type="submit">Add domain</button>
+          </form>
+        </section>
+        <section class="panel local">
+          <h2>Import list</h2>
+          <p>One address and domain per line. Saved to custom.txt.</p>
+          <label for="record-list">Allowed domain list</label>
+          <textarea id="record-list" rows="6" placeholder="192.168.1.20 nas.home&#10;192.168.1.21 printer.home"></textarea>
+          <input id="record-file" type="file" accept=".txt,.list">
+          <button id="record-import" type="button">Import list</button>
+        </section>
+      </div>
+    </div>
+    <p id="message" class="message"></p>
+  </main>
+</div>
+<script>
+const SECTIONS = {
+  resolvers: {title: 'Resolvers', intro: 'Queries go to active resolvers in the order shown. Inactive resolvers are skipped.'},
+  blocked: {title: 'Blocked domains', intro: 'Active domains get an NXDOMAIN response. Inactive domains are kept but not blocked.'},
+  allowed: {title: 'Allowed domains', intro: 'Active domains resolve directly to their private IPv4 address. A domain that is also blocked stays blocked.'},
+};
+const PAGE_SIZES = [10, 20, 50, 100];
+const LISTS = {
+  blocked: {api: '/api/blocked', label: entry => entry.domain, none: 'No blocked domains.'},
+  local: {api: '/api/local-records', label: entry => `${entry.domain} → ${entry.address}`, none: 'No allowed domains.'},
+};
+const pagers = {blocked: {page: 1, size: PAGE_SIZES[0], search: ''}, local: {page: 1, size: PAGE_SIZES[0], search: ''}};
+const sectionName = location.pathname.split('/').pop();
+const section = SECTIONS[sectionName];
+document.title = `DNS Filter | ${section.title}`;
+document.querySelector('#section-title').textContent = section.title;
+document.querySelector('#section-intro').textContent = section.intro;
+document.querySelector(`[data-section="${sectionName}"]`).hidden = false;
+document.querySelectorAll(`a[href="/manage/${sectionName}"]`).forEach(link => link.classList.add('active'));
+async function request(path, options = {}) {
+  const response = await fetch(path, options);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'Request failed');
+  return data;
+}
+function show(message, success) {
+  const element = document.querySelector('#message');
+  element.textContent = message;
+  element.className = `message ${success ? 'success' : 'error'}`;
+}
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, character => `&#${character.charCodeAt(0)};`);
+}
+function button(entry, path, label) {
+  const action = entry.active ? 'Deactivate' : 'Activate';
+  return `<div class="entry${entry.active ? '' : ' inactive'}"><code>${esc(label)}</code><span class="entry-state">${entry.active ? 'Active' : 'Inactive'}</span><button type="button" data-path="${esc(path)}" data-active="${!entry.active}">${action}</button></div>`;
+}
+function count(active, total) {
+  return `${active.toLocaleString()} active / ${total.toLocaleString()} total`;
+}
+function bindEntries() {
+  document.querySelectorAll('.entry button').forEach(element => element.addEventListener('click', async () => {
+    try { await request(element.dataset.path, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({active: element.dataset.active === 'true'})}); await load(); show(element.dataset.active === 'true' ? 'Activated.' : 'Deactivated.', true); }
+    catch (error) { show(error.message, false); }
+  }));
+}
+function renderPager(data, name) {
+  const element = document.querySelector(`#${name}-pager`);
+  const {page, pages, size, matched} = data;
+  element.hidden = matched <= PAGE_SIZES[0];
+  if (element.hidden) return;
+  const options = PAGE_SIZES.map(value => `<option value="${value}"${value === size ? ' selected' : ''}>${value}</option>`).join('');
+  const link = (label, target, disabled) => `<button type="button" data-page="${target}"${disabled ? ' disabled' : ''}>${label}</button>`;
+  element.innerHTML = `<div class="pager-size">Show <select aria-label="Domains per page">${options}</select> per page</div>
+    <div class="pager-range">${((page - 1) * size + 1).toLocaleString()}-${Math.min(page * size, matched).toLocaleString()} of ${matched.toLocaleString()}</div>
+    <div class="pager-pages">${link('First', 1, page === 1)}${link('Prev', page - 1, page === 1)}<span>Page ${page.toLocaleString()} of ${pages.toLocaleString()}</span>${link('Next', page + 1, page === pages)}${link('Last', pages, page === pages)}</div>`;
+}
+function renderFiles(data, name) {
+  const rows = data.files.map(file => `<tr><td><code>${esc(file.name)}</code></td><td class="align-right">${file.entries.toLocaleString()}</td><td class="align-right">${file.skipped.toLocaleString()}</td></tr>`).join('');
+  document.querySelector(`#${name}-files`).innerHTML = `<p>Every .txt file in <code>${esc(data.directory)}</code> is loaded. Changes are picked up automatically.</p>`
+    + (rows ? `<table><thead><tr><th>File</th><th class="align-right">Domains</th><th class="align-right">Skipped lines</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="empty">No list files.</p>');
+}
+function renderList(data, name) {
+  const list = LISTS[name];
+  const path = entry => `${list.api}/${encodeURIComponent(entry.domain)}`;
+  const none = pagers[name].search ? 'No matching domains.' : list.none;
+  document.querySelector(`#${name}-entries`).innerHTML = data.entries.map(entry => button(entry, path(entry), list.label(entry))).join('') || `<p class="empty">${none}</p>`;
+  document.querySelector(`#${name === 'local' ? 'allowed' : name}-count`).textContent = count(data.active, data.total);
+  renderPager(data, name);
+  renderFiles(data, name);
+  bindEntries();
+}
+function renderResolvers(resolvers) {
+  document.querySelector('#resolver-entries').innerHTML = resolvers.map(entry => button(entry, `/api/resolvers/${encodeURIComponent(entry.address)}`, entry.address)).join('') || '<p class="empty">No resolvers.</p>';
+  document.querySelector('#resolver-count').textContent = count(resolvers.filter(entry => entry.active).length, resolvers.length);
+  const warning = document.querySelector('#resolver-warning');
+  const hasActive = resolvers.some(entry => entry.active);
+  warning.textContent = hasActive ? '' : 'No active resolvers: queries that are not blocked or allowed will go unanswered.';
+  warning.className = `message ${hasActive ? '' : 'error'}`;
+  bindEntries();
+}
+async function loadList(name) {
+  const pager = pagers[name];
+  const {page, size, search} = pager;
+  const data = await request(`${LISTS[name].api}?page=${page}&size=${size}&search=${encodeURIComponent(search)}`);
+  if (search !== pager.search) return;
+  pager.page = data.page;
+  renderList(data, name);
+}
+async function load() {
+  if (sectionName === 'resolvers') renderResolvers(await request('/api/resolvers'));
+  else await loadList(sectionName === 'allowed' ? 'local' : 'blocked');
+}
+async function submit(path, body) {
+  await request(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  await load();
+}
+document.querySelector('#blocked-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try { await submit('/api/blocked', {domain: document.querySelector('#blocked-domain').value}); event.target.reset(); show('Domain added.', true); }
+  catch (error) { show(error.message, false); }
+});
+document.querySelector('#blocked-import').addEventListener('click', async () => {
+  try {
+    const file = document.querySelector('#blocked-file').files[0];
+    const text = file ? await file.text() : document.querySelector('#blocked-list').value;
+    const domains = text.split(/\r?\n/).map(line => line.split('#')[0].trim()).filter(Boolean);
+    if (!domains.length) throw new Error('Enter domains or choose a file first');
+    await submit('/api/blocked/bulk', {domains}); document.querySelector('#blocked-list').value = ''; show('Domain list imported.', true);
+  } catch (error) { show(error.message, false); }
+});
+document.querySelector('#record-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try { await submit('/api/local-records', {domain: document.querySelector('#record-domain').value, address: document.querySelector('#record-address').value}); event.target.reset(); show('Domain added.', true); }
+  catch (error) { show(error.message, false); }
+});
+document.querySelector('#record-import').addEventListener('click', async () => {
+  try {
+    const file = document.querySelector('#record-file').files[0];
+    const text = file ? await file.text() : document.querySelector('#record-list').value;
+    const records = text.split(/\r?\n/).map(line => line.split('#')[0].trim()).filter(Boolean);
+    if (!records.length) throw new Error('Enter domains or choose a file first');
+    await submit('/api/local-records/bulk', {records}); document.querySelector('#record-list').value = ''; show('Domain list imported.', true);
+  } catch (error) { show(error.message, false); }
+});
+document.querySelector('#resolver-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try { await submit('/api/resolvers', {address: document.querySelector('#resolver-address').value}); event.target.reset(); show('Resolver added.', true); }
+  catch (error) { show(error.message, false); }
+});
+document.querySelectorAll('.pager').forEach(element => {
+  const name = element.dataset.pager;
+  const reload = () => loadList(name).catch(error => show(error.message, false));
+  element.addEventListener('click', event => {
+    if (!event.target.dataset.page) return;
+    pagers[name].page = Number(event.target.dataset.page);
+    reload();
+  });
+  element.addEventListener('change', event => {
+    pagers[name].size = Number(event.target.value);
+    pagers[name].page = 1;
+    reload();
+  });
+});
+document.querySelectorAll('.list-search').forEach(element => {
+  let timer = null;
+  element.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const name = element.dataset.search;
+      pagers[name].search = element.value.trim();
+      pagers[name].page = 1;
+      loadList(name).catch(error => show(error.message, false));
+    }, 250);
+  });
+});
+load().catch(error => show(error.message, false));
+fetch('/admin/access').then(response => response.json()).then(data => { document.querySelector('#api-docs-link').hidden = !data.can_view_docs; });
+</script>
+</body>
+</html>

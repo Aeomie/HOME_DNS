@@ -46,7 +46,8 @@ dnsfilter/
 ├── config.py              # YAML loading and validation
 └── logging_config.py      # Application logging
 data/
-└── blocked.txt
+├── blocked/   # every .txt file is a blocked list
+└── allowed/   # every .txt file is a list of local records
 tests/
 ├── test_packet.py
 ├── test_blocklist.py
@@ -80,7 +81,7 @@ Forward the original request to upstream resolvers. Try `1.1.1.1`, then
 ### Blocklist
 
 Normalize a domain by lowercasing it and removing its trailing dot. Begin with
-exact matches from `data/blocked.txt`. Add allowlists and wildcard matching
+exact matches from the `.txt` files in `data/blocked/`. Add allowlists and wildcard matching
 only after exact matching is tested.
 
 ### Cache
@@ -121,7 +122,7 @@ path from YAML. Validate at startup and fail with a clear error.
 ### Phase 4: Add exact blocking
 
 - Normalize case and trailing dots before lookup.
-- Load exact domains from `data/blocked.txt`.
+- Load exact domains from the `.txt` files in `data/blocked/`.
 - Return `NXDOMAIN` for blocked domains.
 
 ### Phase 5: Add the in-memory cache
